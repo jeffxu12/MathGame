@@ -1,74 +1,78 @@
 import streamlit as st
-import json
+import sqlite3
 import datetime
+import os
 
-# --- 配置与数据加载 ---
-st.set_page_config(page_title="奥数神殿云端版", layout="centered")
+# --- 数据库操作函数 ---
+def get_db_connection():
+    conn = sqlite3.connect('math_master.db')
+    conn.row_factory = sqlite3.Row
+    return conn
 
-def load_data():
-    with open('questions.json', 'r', encoding='utf-8') as f:
-        return json.load(f)
+def load_questions(day):
+    conn = get_db_connection()
+    qs = conn.execute('SELECT * FROM questions WHERE day = ?', (day,)).fetchall()
+    conn.close()
+    return qs
 
-# 简单的模拟数据库（实际可保存为CSV或JSON）
-def save_score(user, day, score, log):
-    with open('cloud_scores.csv', 'a', encoding='utf-8') as f:
-        f.write(f"{datetime.datetime.now()},{user},{day},{score},{log}\n")
+def save_score(user, day, score, detail):
+    conn = get_db_connection()
+    conn.execute('INSERT INTO scores (timestamp, user, day, score, detail) VALUES (?,?,?,?,?)',
+                 (datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), user, day, score, detail))
+    conn.commit()
+    conn.close()
 
-# --- 登录界面 ---
+# --- 网页布局 ---
+st.set_page_config(page_title="奥数云端神殿", layout="centered")
+
 if 'login' not in st.session_state:
     st.title("🛡️ 奥数神殿入口")
     user = st.text_input("用户名")
     pwd = st.text_input("密码", type="password")
     if st.button("进入神殿"):
-        if pwd == "123456": # 爸爸可以修改密码
+        if pwd == "123456":
             st.session_state.login = True
             st.session_state.user = user
             st.rerun()
 else:
-    # --- 游戏主界面 ---
-    st.sidebar.title(f"🦸‍♂️ 英雄: {st.session_state.user}")
-    menu = st.sidebar.radio("菜单", ["开始挑战", "战绩查看"])
-
-    questions = load_data()
+    st.sidebar.title(f"🦸‍♂️ {st.session_state.user}")
+    menu = st.sidebar.radio("菜单", ["开始挑战", "战绩查看", "爸爸留言板"])
 
     if menu == "开始挑战":
-        day = st.number_input("选择挑战天数", min_value=1, max_value=200, step=1)
-        today_qs = [q for q in questions if q['day'] == day]
-
-        if today_qs:
-            st.header(f"📅 第 {day} 天挑战")
-            total_score = 0
-            
-            for idx, q in enumerate(today_qs):
-                st.subheader(f"第 {idx+1} 题: {q['title']}")
-                st.write(q['question'])
-                
-                # 记录每道题的尝试次数
-                key = f"q_{day}_{idx}"
-                if key not in st.session_state:
-                    st.session_state[key] = 0
-                
-                user_ans = st.text_input("请输入答案", key=f"input_{key}")
-                
-                if st.button("提交答案", key=f"btn_{key}"):
-                    st.session_state[key] += 1
-                    attempts = st.session_state[key]
+        day = st.sidebar.number_input("挑战天数", min_value=1, value=1)
+        qs = load_questions(day)
+        
+        if not qs:
+            st.warning("这一天的题目还没准备好哦！")
+        else:
+            st.header(f"第 {day} 天：逻辑试炼")
+            for q in qs:
+                with st.expander(f"题目：{q['title']}", expanded=True):
+                    st.write(q['question'])
+                    ans = st.text_input("输入你的答案", key=f"ans_{q['day']}_{q['id']}")
                     
-                    if user_ans == q['answer']:
-                        scores = [10, 6, 3, 1, -3]
-                        p = scores[min(attempts-1, 4)]
-                        st.success(f"✅ 正确！第{attempts}次成功，获得 {p} 分")
-                        save_score(st.session_state.user, day, p, f"Q{idx+1} OK")
-                    else:
-                        if attempts < 5:
-                            st.warning(f"❌ 不对哦！锦囊提示：{q['hints'][attempts-1]}")
+                    # 提示系统逻辑 (利用 session_state 记录尝试次数)
+                    attempt_key = f"att_{q['day']}_{q['id']}"
+                    if attempt_key not in st.session_state: st.session_state[attempt_key] = 0
+                    
+                    if st.button("提交答案", key=f"btn_{q['day']}_{q['id']}"):
+                        st.session_state[attempt_key] += 1
+                        att = st.session_state[attempt_key]
+                        if ans == q['answer']:
+                            pts = [10, 6, 3, 1, -3][min(att-1, 4)]
+                            st.success(f"✅ 正确！获得 {pts} 分")
+                            save_score(st.session_state.user, day, pts, q['title'])
                         else:
-                            st.error(f"💔 机会用完，答案是：{q['answer']}")
+                            hints = [q['hint1'], q['hint2'], q['hint3'], q['hint4'], q['hint5']]
+                            st.error(f"❌ 提示：{hints[min(att-1, 4)]}")
 
     elif menu == "战绩查看":
         st.header("📈 英雄成长记录")
-        if os.path.exists('cloud_scores.csv'):
-            with open('cloud_scores.csv', 'r') as f:
-                st.text(f.read())
+        conn = get_db_connection()
+        df = conn.execute('SELECT * FROM scores ORDER BY timestamp DESC').fetchall()
+        conn.close()
+        if df:
+            for row in df:
+                st.write(f"⏱ {row['timestamp']} | 🏆 {row['score']}分 | 📖 {row['detail']}")
         else:
-            st.write("暂无记录，快去挑战吧！")
+            st.info("还没有战绩，加油哦！")
