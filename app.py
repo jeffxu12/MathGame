@@ -3,7 +3,7 @@ import sqlite3
 import datetime
 import os
 
-# ================= 1. 数据库逻辑 =================
+# --- 数据库连接 ---
 DB_NAME = 'math_master.db'
 
 def get_db_connection():
@@ -17,7 +17,6 @@ def get_db_connection():
 def load_questions(day):
     conn = get_db_connection()
     if conn:
-        # 注意：这里我们假设数据库里增加了 english_question 字段
         qs = conn.execute('SELECT * FROM questions WHERE day = ?', (day,)).fetchall()
         conn.close()
         return qs
@@ -39,81 +38,86 @@ def get_total_points(user):
         return result['total'] if result['total'] else 0
     return 0
 
-# ================= 2. 页面配置 =================
-st.set_page_config(page_title="Math Temple: Hero's Journey", page_icon="🛡️", layout="centered")
+# --- 页面配置 ---
+st.set_page_config(page_title="奥数神殿", page_icon="🛡️")
 
 if 'login' not in st.session_state:
-    st.title("🛡️ Math Temple Entrance")
-    with st.form("login_form"):
-        user = st.text_input("Hero Name")
-        pwd = st.text_input("Password", type="password")
-        if st.form_submit_button("Enter"):
+    st.title("🛡️ 奥数神殿入口")
+    with st.form("login"):
+        user = st.text_input("英雄姓名")
+        pwd = st.text_input("通关密语", type="password")
+        if st.form_submit_button("进入神殿"):
             if pwd == "123456":
                 st.session_state.login = True
                 st.session_state.user = user
                 st.rerun()
             else:
-                st.error("Incorrect Password!")
+                st.error("密语错误！")
 else:
-    # ================= 3. 主界面 =================
+    # --- 主界面 ---
     points = get_total_points(st.session_state.user)
     st.sidebar.title(f"🦸‍♂️ {st.session_state.user}")
-    st.sidebar.metric("Total Coins", f"{points} 🪙")
+    st.sidebar.metric("当前积分", f"{points} 🪙")
     
-    menu = st.sidebar.radio("Navigation", ["🔥 Daily Quest", "🛒 Item Shop", "📈 Achievement"])
+    menu = st.sidebar.radio("前往地点", ["🔥 每日挑战", "🛒 积分商城", "📈 成长记录"])
 
-    if menu == "🔥 Daily Quest":
-        st.header("📅 Daily Math Challenge")
-        day_to_solve = st.number_input("Select Day", min_value=1, value=1, step=1)
-        questions = load_questions(day_to_solve)
+    if menu == "🔥 每日挑战":
+        st.header("📅 每日逻辑试炼")
+        day_val = st.number_input("选择挑战天数", min_value=1, value=1, step=1)
+        questions = load_questions(day_val)
         
         if not questions:
-            st.warning("Quest not available for today.")
+            st.info("今天的题目还没准备好哦。")
         else:
             for q in questions:
-                q_key = f"day{q['day']}_id{q['id']}"
+                q_key = f"q_{q['day']}_{q['id']}"
                 
                 # 初始化状态
                 if f"att_{q_key}" not in st.session_state: st.session_state[f"att_{q_key}"] = 0
                 if f"solved_{q_key}" not in st.session_state: st.session_state[f"solved_{q_key}"] = False
-                if f"translate_{q_key}" not in st.session_state: st.session_state[f"translate_{q_key}"] = False
+                if f"trans_{q_key}" not in st.session_state: st.session_state[f"trans_{q_key}"] = False
 
-                with st.expander(f"Quest {q['id']}: {q['title']}", expanded=not st.session_state[f"solved_{q_key}"]):
+                with st.expander(f"第 {q['id']} 题：{q['title']}", expanded=not st.session_state[f"solved_{q_key}"]):
                     
-                    # --- 英文/中文显示逻辑 ---
-                    if not st.session_state[f"translate_{q_key}"]:
-                        # 只显示英文（假设数据库 question 字段存的是英文）
-                        st.markdown(f"#### {q['question']}")
-                        if st.button("I need Chinese translation (-2 coins)", key=f"trans_btn_{q_key}"):
-                            st.session_state[f"translate_{q_key}"] = True
+                    # 题目显示：默认英文，点翻译显示双语
+                    if not st.session_state[f"trans_{q_key}"]:
+                        st.info(f"**Question:** {q['question']}")
+                        if st.button("查看中文对照 (-2分)", key=f"t_btn_{q_key}"):
+                            st.session_state[f"trans_{q_key}"] = True
                             st.rerun()
                     else:
-                        # 显示中英对照
-                        st.markdown(f"**English:** {q['question']}")
-                        st.markdown(f"**中文:** {q['hint5']}") # 临时借用 hint5 存中文，或者看下方数据库修改方案
+                        st.info(f"**Question:** {q['question']}\n\n**中文对照:** {q['hint5']}")
 
                     if not st.session_state[f"solved_{q_key}"]:
-                        user_ans = st.text_input("Your Answer", key=f"in_{q_key}")
-                        if st.button("Check Answer", key=f"btn_{q_key}"):
+                        ans = st.text_input("你的答案", key=f"ans_{q_key}")
+                        if st.button("提交答案", key=f"sub_{q_key}"):
                             st.session_state[f"att_{q_key}"] += 1
                             att = st.session_state[f"att_{q_key}"]
                             
-                            if user_ans == str(q['answer']):
-                                # 核心扣分逻辑
-                                # 第一次对的基础分：10 (未翻译) 或 8 (已翻译)
-                                base_score = 8 if st.session_state[f"translate_{q_key}"] else 10
-                                score_map = [base_score, 6, 1, -3]
-                                final_pts = score_map[min(att-1, 3)]
+                            if ans == str(q['answer']):
+                                # 计算分数：翻译过起步8分，没翻译起步10分
+                                start_score = 8 if st.session_state[f"trans_{q_key}"] else 10
+                                score_rules = [start_score, 6, 1, -3]
+                                final_p = score_rules[min(att-1, 3)]
                                 
                                 st.session_state[f"solved_{q_key}"] = True
-                                save_score(st.session_state.user, day_to_solve, final_pts, f"Solved: {q['title']}")
+                                save_score(st.session_state.user, day_val, final_p, f"完成题目：{q['title']}")
                                 st.balloons()
-                                st.success(f"🎊 Correct! You earned {final_pts} coins!")
                                 st.rerun()
                             else:
                                 hints = [q['hint1'], q['hint2'], q['hint3'], q['hint4'], q['hint5']]
-                                st.error(f"❌ Wrong! Hint #{att}: {hints[min(att-1, 4)]}")
+                                st.error(f"❌ 不对哦！提示：{hints[min(att-1, 4)]}")
                     else:
-                        st.success("✅ Quest Completed!")
+                        st.success("✅ 已挑战成功！")
 
-    # ... 商城和记录代码保持不变 ...
+    elif menu == "🛒 积分商城":
+        st.header("🎁 积分商城")
+        # ... (此处保持之前的商城代码即可) ...
+
+    elif menu == "📈 成长记录":
+        st.header("📜 英雄成长历史")
+        conn = get_db_connection()
+        logs = conn.execute('SELECT * FROM scores WHERE user = ? ORDER BY timestamp DESC', (st.session_state.user,)).fetchall()
+        conn.close()
+        for log in logs:
+            st.write(f"⏱ `{log['timestamp']}` | {log['score']} 分 | {log['detail']}")
